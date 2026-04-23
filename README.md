@@ -1,38 +1,108 @@
 # envo
 
-A Nix-based developer environment runtime with lazy package realization and instant activation.
+**Environments that start in 50ms and download nothing you don't use.**
 
-## What is envo?
+envo is a Nix-based developer environment runtime. It resolves packages from nixpkgs, generates lightweight shims that fetch binaries on first use, and activates your environment by sourcing a single file — no subshell, no container, no multi-GB download before your first `make`.
 
-envo wraps Nix to provide developer environments that:
+```
+$ time source <(envo activate --inline)
+real    0m0.003s    # 3ms. Not a typo.
+```
 
-- **Activate in under 100ms** — no subshell, no per-shell overhead
-- **Download nothing until you use it** — packages are fetched on first invocation, not at activation
-- **Work across platforms** — Linux (x86_64, aarch64) and macOS (aarch64)
-- **Never expose Nix syntax** — the manifest is a simple TOML file
-
-## Quick Start
+## Install
 
 ```bash
-# Build from source
-cargo build --release
+curl -sSf https://envo.dev/install.sh | sh
+```
 
-# Initialize a new environment
+Or build from source:
+
+```bash
+git clone https://github.com/tylerPBprojects/envo.git
+cd envo
+cargo build --release
+cp target/release/envo ~/.envo/bin/envo
+```
+
+Requires [Nix](https://install.determinate.systems/nix) for package management. envo will prompt you to install it if needed.
+
+## Quickstart
+
+```bash
+# Create an environment
 envo init
 
 # Add packages
-envo install ripgrep python3 jq
+envo install ripgrep jq python3
 
-# Activate (source the env snapshot)
+# Activate (sets PATH + env vars, no subshell)
 source <(envo activate --inline)
 
-# Use your tools — they fetch on first run
-rg --version    # downloads ripgrep on first use, instant thereafter
+# Use your tools — they fetch on first run, instant after that
+rg --version     # first run: downloads ripgrep (~2s), then executes
+rg --version     # second run: instant (<5ms)
 ```
+
+## PyTorch + CUDA in 50ms
+
+The hardest environment problem in software — multi-GB GPU dependencies — in five commands:
+
+```bash
+envo init --template cuda-pytorch
+envo install
+source <(envo activate --inline)     # 50ms. Nothing downloaded yet.
+python3 -c "import torch; print(torch.cuda.is_available())"  # fetches on first use
+```
+
+Works on both GPU and CPU machines. PyTorch detects CUDA at runtime, not install time.
+
+Run the full demo: `bash templates/cuda-pytorch/demo.sh`
+
+## How It Works
+
+Traditional tools download everything at activation. envo doesn't.
+
+```
+Traditional (Flox, devbox, conda):
+
+  activate → download 2GB → wait 60s → ready
+
+envo:
+
+  activate → set PATH (3ms) → ready
+  first use of rg → download rg (2s) → exec
+  first use of python → download python (5s) → exec
+  second use of anything → instant
+```
+
+The trick: envo generates bash shims in `.envo/bin/` that look like real binaries. When you call `rg`, the shim checks if the Nix store path exists. If not, it fetches it. Then it `exec`s the real binary with your arguments. After the first fetch, the shim is just a fast-path `exec`.
+
+## Features
+
+**Core runtime:**
+- Lazy package realization — nothing downloads until invoked
+- Sub-100ms activation — sources a precomputed env snapshot, no subshell
+- Simple TOML manifest — feels like `pyproject.toml` or `Cargo.toml`
+- CycloneDX SBOM export — `envo export sbom`
+- Built-in templates — `envo init --template cuda-pytorch`
+- Auto-updater — `envo self-update`
+
+**IDE integration:**
+- VS Code extension — auto-activates terminals, status bar, package management commands
+- Manifest LSP — inline diagnostics, autocompletion, hover docs for `manifest.toml`
+
+**AI agent integration:**
+- MCP server — 6 tools + 3 resources for Claude Code, Cursor, and other MCP clients
+- Structured JSON output — `envo version --json`, `envo search --json`
+
+**DevOps:**
+- Nix bootstrap — detects and offers to install Nix interactively
+- POSIX installer — `curl | sh`, no sudo required
+- Telemetry — opt-out, privacy-conscious, PostHog-backed
 
 ## Manifest Format
 
-envo environments are defined in `.envo/manifest.toml`:
+Environments are defined in `.envo/manifest.toml`:
 
 ```toml
 [project]
@@ -40,10 +110,9 @@ name = "my-app"
 description = "My application"
 
 [packages]
-ripgrep = "*"                                          # latest version
-python = { version = "3.12", pkg-path = "python3" }    # specific version + nixpkgs attr
-jq = "1.7"                                             # pinned version
-nodejs = { priority = 10 }                             # priority for PATH ordering
+ripgrep = "*"
+python = { pkg-path = "python312" }
+jq = "1.7"
 
 [vars]
 EDITOR = "vim"
@@ -54,84 +123,141 @@ on-activate = '''
 echo "Welcome to my-app!"
 '''
 
-[services.postgres]
-command = "postgres -D ./data/pg"
-shutdown = "pg_ctl stop -D ./data/pg"
-
 [options]
-nixpkgs-channel = "nixpkgs/nixos-24.11"
 allow-unfree = true
-systems = ["x86_64-linux", "aarch64-linux"]
 ```
 
-## Building
+## CLI Reference
 
-```bash
-# Debug build
-cargo build
-
-# Release build
-cargo build --release
-
-# Run all tests (unit + integration)
-cargo test
-
-# Run only manifest tests
-cargo test manifest
-
-# Run bash integration tests
-bash tests/integration/test_init.sh
 ```
+envo init [--template <name>]    Create a new environment
+envo install [packages...]       Install packages (or resolve existing manifest)
+envo uninstall <package>         Remove a package
+envo activate [--inline]         Print activation script or path
+envo deactivate [--inline]       Print deactivation script
+envo search <query> [--json]     Search nixpkgs
+envo run <command> [args...]     Run a command in the environment
+envo update                      Update all packages
+envo export sbom                 Export CycloneDX SBOM
+envo version [--json]            Show version, Nix status, system info
+envo self-update [--check]       Update envo itself
+```
+
+## VS Code Extension
+
+The extension auto-activates your environment when you open a project:
+
+1. Install the extension from `envo-vscode/`
+2. Open a project with `.envo/manifest.toml`
+3. New terminals automatically have the environment active
+4. Use the command palette for package management
+
+## MCP Server
+
+Connect Claude Code, Cursor, or any MCP client:
+
+```json
+{
+  "mcpServers": {
+    "envo": {
+      "command": "envo-mcp"
+    }
+  }
+}
+```
+
+Available tools: `envo_init`, `envo_install`, `envo_uninstall`, `envo_search`, `envo_env_info`, `envo_activate`
+
+Available resources: `envo://manifest`, `envo://lockfile`, `envo://status`
+
+## How envo Compares
+
+| | envo | Flox | devbox | devenv |
+|---|---|---|---|---|
+| Activation speed | **<100ms** | 3-5s | 1-2s | 1-2s |
+| Lazy fetch | **Yes** | No | No | No |
+| Subshell | **No** | Yes | Yes | Yes |
+| Manifest LSP | **Yes** | No | No | No |
+| MCP server | **Yes** | No | No | No |
+| SBOM export | **Yes** | Planned | No | No |
+| Nix syntax exposed | **Never** | Rarely | Never | Sometimes |
 
 ## Architecture
 
-envo is built in five modules:
-
-1. **Manifest** (`src/manifest/`) — TOML schema, parsing, validation
-2. **Lockfile** (`src/lockfile/`) — Nix resolution, per-system store paths
-3. **Realize** (`src/realize/`) — lazy shim generation, on-demand fetching
-4. **Activate** (`src/activate/`) — shell-sourceable env snapshot generation
-5. **CLI** (`src/cli/`) — user-facing commands tying it all together
+```
+┌─────────────────────────────────────────────────────┐
+│                    Surfaces                          │
+│  ┌─────────┐  ┌──────────────┐  ┌────────────────┐  │
+│  │   CLI   │  │ VS Code Ext  │  │  MCP Server    │  │
+│  └────┬────┘  └──────┬───────┘  └───────┬────────┘  │
+│       │              │                  │            │
+│  ┌────┴──────────────┴──────────────────┴────────┐  │
+│  │              envo library (Rust)               │  │
+│  │  ┌──────────┐ ┌────────┐ ┌─────────┐         │  │
+│  │  │ Manifest │ │Lockfile│ │Realizer │         │  │
+│  │  └──────────┘ └────────┘ └─────────┘         │  │
+│  │  ┌──────────┐ ┌─────────────┐ ┌───────────┐  │  │
+│  │  │Activator │ │Nix Bootstrap│ │ Telemetry │  │  │
+│  │  └──────────┘ └─────────────┘ └───────────┘  │  │
+│  └───────────────────────┬───────────────────────┘  │
+│                          │                           │
+│                    ┌─────┴─────┐                     │
+│                    │    Nix    │                      │
+│                    └───────────┘                     │
+└─────────────────────────────────────────────────────┘
+```
 
 ## Project Layout
 
 ```
-.envo/
-├── manifest.toml       # Environment declaration (you edit this)
-├── manifest.lock        # Resolved store paths (generated, commit to git)
-├── bin/                 # Shim scripts (generated)
-│   ├── rg
-│   ├── python3
-│   └── jq
-└── env-snapshot.sh      # Activation script (generated)
+envo/
+├── src/
+│   ├── manifest/        # TOML schema, parsing, validation
+│   ├── lockfile/        # Nix resolution, store paths
+│   ├── realize/         # Shim generation, lazy fetch
+│   ├── activate/        # Shell-sourceable env snapshots
+│   ├── cli/             # Command routing and handlers
+│   ├── lsp/             # Language server (diagnostics, completion, hover)
+│   ├── mcp/             # MCP server (tools, resources, protocol)
+│   ├── telemetry.rs     # PostHog telemetry (opt-out)
+│   ├── nix_bootstrap.rs # Nix detection and installation
+│   ├── self_update.rs   # Auto-updater via GitHub releases
+│   └── templates.rs     # Embedded environment templates
+├── tests/
+│   ├── integration/     # Bash end-to-end tests
+│   └── *.rs             # Rust unit + integration tests
+├── templates/           # Reference template files + demo scripts
+├── install.sh           # POSIX installer
+└── uninstall.sh         # POSIX uninstaller
 ```
 
-## Development Status
-
-Session 1 (Manifest) — ✅ Complete
-Session 2 (Lockfile) — ✅ Complete
-Session 3 (Realize) — ✅ Complete
-Session 4 (Activate) — ✅ Complete
-Session 5 (CLI) — ✅ Complete
-
-## Testing
+## Development
 
 ```bash
-# All unit and integration tests (no Nix required)
+# Build all binaries (envo, envo-lsp, envo-mcp)
+cargo build
+
+# Run all 205 tests
 cargo test
 
-# Full end-to-end workflow (requires Nix + network)
-cargo build
+# Run integration tests (requires Nix)
 bash tests/integration/test_full_workflow.sh
-
-# Error case handling
-bash tests/integration/test_error_cases.sh
-
-# Individual module tests
-bash tests/integration/test_activate.sh
 bash tests/integration/test_lazy_fetch.sh
-bash tests/integration/test_install.sh
+bash tests/integration/test_cuda_demo.sh
+bash tests/integration/test_mcp.sh
+bash tests/integration/test_lsp.sh
 ```
+
+## Telemetry
+
+envo collects anonymous usage data to understand how the product is used. Telemetry is opt-out — disable it in `~/.envo/config.toml`:
+
+```toml
+[telemetry]
+enabled = false
+```
+
+We collect: command name, success/failure, duration, OS, and app version. We never collect: source code, file contents, secrets, environment variable values, file paths, or command arguments.
 
 ## License
 
