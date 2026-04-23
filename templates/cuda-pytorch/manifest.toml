@@ -1,0 +1,20 @@
+[project]
+name = "cuda-pytorch-demo"
+description = "PyTorch + CUDA environment with lazy fetch"
+
+[packages]
+python = { pkg-path = "python312" }
+torch = { pkg-path = "python312Packages.torch" }
+torchvision = { pkg-path = "python312Packages.torchvision" }
+
+[vars]
+CUDA_VISIBLE_DEVICES = "0"
+
+[hook]
+on-activate = '''
+echo "PyTorch CUDA environment ready"
+python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')" 2>/dev/null || true
+'''
+
+[options]
+allow-unfree = true

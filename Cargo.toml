@@ -1,0 +1,33 @@
+[package]
+name = "envo"
+version = "0.1.0"
+edition = "2021"
+description = "A Nix-based developer environment runtime with lazy package realization and instant activation"
+license = "MIT"
+
+[[bin]]
+name = "envo"
+path = "src/main.rs"
+
+[[bin]]
+name = "envo-lsp"
+path = "src/bin/envo_lsp.rs"
+
+[[bin]]
+name = "envo-mcp"
+path = "src/bin/envo_mcp.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "io-std"] }
+toml = "0.8"
+tower-lsp = "0.20"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"

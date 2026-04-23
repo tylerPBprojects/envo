@@ -1,0 +1,18 @@
+[project]
+name = "cpu-pytorch-demo"
+description = "PyTorch (CPU-only) environment for development"
+
+[packages]
+python = { pkg-path = "python312" }
+torch = { pkg-path = "python312Packages.torch" }
+
+[vars]
+
+[hook]
+on-activate = '''
+echo "PyTorch CPU environment ready"
+python3 -c "import torch; print(f'PyTorch {torch.__version__}')" 2>/dev/null || true
+'''
+
+[options]
+allow-unfree = true
