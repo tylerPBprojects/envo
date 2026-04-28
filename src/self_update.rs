@@ -21,7 +21,7 @@ pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Errors that can occur during self-update operations.
 #[derive(Debug, Error)]
 pub enum SelfUpdateError {
-    #[error("could not check for updates — are you connected to the internet?")]
+    #[error("could not check for updates — check your connection or run `gh auth login`")]
     NetworkError,
 
     #[error("could not parse version from GitHub response")]
@@ -62,13 +62,18 @@ pub fn check_latest_version() -> Result<String, SelfUpdateError> {
         "https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
     );
 
-    let output = Command::new("curl")
-        .args([
-            "-sSf",
-            "-H", "Accept: application/vnd.github+json",
-            "-H", "User-Agent: envo-self-update",
-            &url,
-        ])
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sSf",
+        "-H", "Accept: application/vnd.github+json",
+        "-H", "User-Agent: envo-self-update",
+    ]);
+    if let Some(token) = get_github_token() {
+        cmd.arg("-H").arg(format!("Authorization: Bearer {token}"));
+    }
+    cmd.arg(&url);
+
+    let output = cmd
         .output()
         .map_err(|_| SelfUpdateError::NetworkError)?;
 
@@ -153,10 +158,14 @@ pub fn download_and_replace(version: &str) -> Result<(), SelfUpdateError> {
     );
 
     // Download to temp file
-    let status = Command::new("curl")
-        .args(["-sSfL", "-o"])
-        .arg(temp_binary.as_os_str())
-        .arg(&url)
+    let mut cmd = Command::new("curl");
+    cmd.args(["-sSfL", "-o"]).arg(temp_binary.as_os_str());
+    if let Some(token) = get_github_token() {
+        cmd.arg("-H").arg(format!("Authorization: Bearer {token}"));
+    }
+    cmd.arg(&url);
+
+    let status = cmd
         .status()
         .map_err(|_| SelfUpdateError::NetworkError)?;
 
@@ -243,6 +252,32 @@ pub fn get_current_platform() -> Result<String, SelfUpdateError> {
     };
 
     Ok(format!("{platform_os}-{platform_arch}"))
+}
+
+/// Try to find a GitHub token for authenticating API and download requests.
+///
+/// Checks GITHUB_TOKEN env var first, then falls back to the `gh` CLI.
+/// Required for private repositories.
+fn get_github_token() -> Option<String> {
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+
+    let output = Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+
+    None
 }
 
 /// Get the user's home directory.
