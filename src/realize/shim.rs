@@ -63,8 +63,16 @@ exit 1
 /// Generate a "meta-shim" for a package whose binaries haven't been
 /// discovered yet (the store path hasn't been realized).
 ///
-/// After first realization, the realize module scans the store path's
-/// `bin/` directory and replaces this with individual per-binary shims.
+/// On first invocation the meta-shim:
+///   1. Realizes the Nix store path (fetching from the binary cache)
+///   2. Creates lightweight per-binary shims for every binary in the store
+///      path's `bin/` directory so callers can use the real binary name
+///      (e.g. `rg` for the `ripgrep` package) immediately after
+///   3. Execs the target binary, handling the common case where the binary
+///      name differs from the package name (e.g. ripgrep → rg)
+///
+/// The lightweight inline shims are replaced by full shims on the next
+/// `envo activate` call via the `.needs-rescan` marker.
 pub fn generate_meta_shim_script(
     store_path: &str,
     package_name: &str,
@@ -78,7 +86,7 @@ set -euo pipefail
 STORE_PATH="{store_path}"
 PACKAGE="{package_name}"
 
-# Check if the store path is already realized
+# Ensure the store path is realized (fetch on first use)
 if [ ! -e "$STORE_PATH" ]; then
     echo "envo: fetching $PACKAGE on first use..." >&2
 
@@ -92,22 +100,55 @@ if [ ! -e "$STORE_PATH" ]; then
     fi
 fi
 
-# Mark that this package needs binary discovery
-ENVO_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
-touch "$ENVO_DIR/.needs-rescan"
+# Create lightweight per-binary shims for every binary in the store path so
+# callers can use the real binary name (e.g. `rg`) right away.  These are
+# replaced by full shims on the next `envo activate` call.
+_envo_bin="$(dirname "$(readlink -f "$0")")"
+if [ -d "$STORE_PATH/bin" ]; then
+    for _bp in "$STORE_PATH/bin/"*; do
+        _bn="$(basename "$_bp")"
+        case "$_bn" in .*) continue ;; esac
+        [ -f "$_bp" ] || [ -L "$_bp" ] || continue
+        _shim="$_envo_bin/$_bn"
+        # Only create if no shim exists yet (avoids clobbering real shims)
+        if [ ! -e "$_shim" ]; then
+            printf '#!/usr/bin/env bash\nexec "%s/bin/%s" "$@"\n' "$STORE_PATH" "$_bn" > "$_shim"
+            chmod +x "$_shim"
+        fi
+    done
+fi
 
-# Try to exec the binary matching the package name
+# Mark for rescan so the next `envo activate` generates full per-binary shims
+touch "$(dirname "$_envo_bin")/.needs-rescan"
+
+# Exec the target binary.  Try the package name first (common case: jq, python,
+# etc.), then fall back to scanning bin/ for packages where the binary name
+# differs from the package name (e.g. ripgrep → rg).
 if [ -e "$STORE_PATH/bin/$PACKAGE" ]; then
     exec "$STORE_PATH/bin/$PACKAGE" "$@"
 fi
 
-# Package name doesn't match a binary — list available binaries
-echo "envo: package '$PACKAGE' is installed but has no binary named '$PACKAGE'" >&2
+_first="" _count=0
 if [ -d "$STORE_PATH/bin" ]; then
-    echo "envo: available binaries:" >&2
-    ls -1 "$STORE_PATH/bin/" | sed 's/^/  /' >&2
+    for _bp in "$STORE_PATH/bin/"*; do
+        case "$(basename "$_bp")" in .*) continue ;; esac
+        [ -f "$_bp" ] || [ -L "$_bp" ] || continue
+        _count=$((_count + 1))
+        [ -z "$_first" ] && _first="$_bp"
+    done
 fi
-exit 1
+
+if [ "$_count" -eq 0 ]; then
+    echo "envo: no binaries found for package '$PACKAGE' in $STORE_PATH/bin" >&2
+    exit 1
+elif [ "$_count" -eq 1 ]; then
+    exec "$_first" "$@"
+else
+    # Multiple binaries and none matches the package name — tell the user
+    echo "envo: package '$PACKAGE' provides multiple binaries; run by name:" >&2
+    ls -1 "$STORE_PATH/bin/" | grep -v '^\.' | sed 's/^/  /' >&2
+    exit 1
+fi
 "#
     )
 }
@@ -180,7 +221,12 @@ mod tests {
         assert!(script.starts_with("#!/usr/bin/env bash"));
         assert!(script.contains("PACKAGE=\"ripgrep\""));
         assert!(script.contains(".needs-rescan"));
-        assert!(script.contains("available binaries"));
+        // Creates per-binary inline shims on first use
+        assert!(script.contains("_envo_bin="));
+        assert!(script.contains("chmod +x"));
+        // Falls back to scanning bin/ when binary name != package name
+        assert!(script.contains("_count=0"));
+        assert!(script.contains("_first="));
     }
 
     #[test]
