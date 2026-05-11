@@ -10,7 +10,7 @@ set -e
 # ── Configuration ──────────────────────────────────────────────────
 
 VERSION="0.1.0"
-GITHUB_OWNER="envo-dev"
+GITHUB_OWNER="tylerPBprojects"
 GITHUB_REPO="envo"
 INSTALL_DIR="$HOME/.envo/bin"
 CONFIG_DIR="$HOME/.envo"

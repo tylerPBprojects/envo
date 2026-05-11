@@ -10,7 +10,7 @@ use std::process::Command;
 use thiserror::Error;
 
 /// GitHub repository owner for release downloads.
-const GITHUB_OWNER: &str = "envo-dev";
+const GITHUB_OWNER: &str = "tylerPBprojects";
 
 /// GitHub repository name for release downloads.
 const GITHUB_REPO: &str = "envo";
