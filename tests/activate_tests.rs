@@ -79,7 +79,7 @@ fn test_full_activation_cycle_posix() {
 
     // Deactivate
     let deact = activator
-        .generate_deactivation(&manifest, ShellType::Bash)
+        .generate_deactivation(&manifest, Some(&lockfile), ShellType::Bash)
         .unwrap();
 
     assert!(deact.contains("unset ENVO_ENV"));

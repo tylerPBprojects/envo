@@ -114,6 +114,36 @@ pub fn cmd_install(packages: &[String], verbose: bool) -> Result<()> {
 
     let resolve_only = packages.is_empty();
 
+    // Fast path: no packages to add and lockfile is already fresh — just regenerate shims.
+    if resolve_only {
+        if let Ok(existing_lockfile) = Lockfile::load(Some(&cwd)) {
+            if !existing_lockfile.is_stale(&manifest) {
+                if verbose {
+                    eprintln!("ℹ Lockfile is up to date, regenerating shims...");
+                }
+                let system = detect_current_system();
+                let realizer = Realizer::new(&cwd);
+                let shim_manifest = realizer
+                    .generate_shims(&existing_lockfile, &system)
+                    .context("failed to generate shims")?;
+                let shell = ShellType::detect();
+                let activator = Activator::new(&cwd);
+                activator
+                    .save_snapshot(&manifest, &existing_lockfile, &shim_manifest, shell)
+                    .context("failed to generate activation snapshot")?;
+                println!("✓ Resolved {} package(s)", manifest.packages().len());
+                let mut extra = HashMap::new();
+                extra.insert("package_count".to_string(), serde_json::json!(0u64));
+                telemetry::track_event(
+                    "cli", "cli_install", true,
+                    Some(start.elapsed().as_millis() as u64),
+                    Some(extra), verbose,
+                );
+                return Ok(());
+            }
+        }
+    }
+
     // Add packages to manifest
     for pkg in packages {
         if verbose {
@@ -275,11 +305,12 @@ pub fn cmd_deactivate(inline: bool, shell_arg: Option<&str>, _verbose: bool) -> 
         .and_then(ShellType::from_str)
         .unwrap_or_else(ShellType::detect);
 
+    let lockfile = Lockfile::load(Some(&cwd)).ok();
     let activator = Activator::new(&cwd);
 
     if inline {
         let script = activator
-            .generate_deactivation(&manifest, shell)
+            .generate_deactivation(&manifest, lockfile.as_ref(), shell)
             .context("failed to generate deactivation script")?;
         print!("{script}");
     } else {

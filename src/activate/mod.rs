@@ -11,6 +11,7 @@
 pub mod snapshot;
 
 use crate::lockfile::Lockfile;
+use crate::lockfile::resolver::detect_current_system;
 use crate::manifest::{Manifest, ENVO_DIR};
 use crate::realize::ShimManifest;
 use snapshot::ShellType;
@@ -78,6 +79,9 @@ impl Activator {
             .hooks()
             .and_then(|h| h.on_activate.as_deref());
 
+        let system = detect_current_system();
+        let python_paths = python_site_packages_paths(lockfile, &system);
+
         let script = match shell {
             ShellType::Bash | ShellType::Zsh => snapshot::render_posix_snapshot(
                 &bin_dir_str,
@@ -86,6 +90,7 @@ impl Activator {
                 &vars,
                 lockfile_hash,
                 hook_script,
+                &python_paths,
             ),
             ShellType::Fish => snapshot::render_fish_snapshot(
                 &bin_dir_str,
@@ -93,6 +98,7 @@ impl Activator {
                 &project_dir_str,
                 &vars,
                 lockfile_hash,
+                &python_paths,
             ),
         };
 
@@ -103,6 +109,7 @@ impl Activator {
     pub fn generate_deactivation(
         &self,
         manifest: &Manifest,
+        lockfile: Option<&Lockfile>,
         shell: ShellType,
     ) -> Result<String, ActivateError> {
         let abs_project = self.absolute_project_dir()?;
@@ -111,12 +118,17 @@ impl Activator {
 
         let var_keys: Vec<&str> = manifest.vars().keys().map(|s| s.as_str()).collect();
 
+        let had_python_paths = lockfile.map_or(false, |lf| {
+            let system = detect_current_system();
+            !python_site_packages_paths(lf, &system).is_empty()
+        });
+
         let script = match shell {
             ShellType::Bash | ShellType::Zsh => {
-                snapshot::render_posix_deactivation(&bin_dir_str, &var_keys)
+                snapshot::render_posix_deactivation(&bin_dir_str, &var_keys, had_python_paths)
             }
             ShellType::Fish => {
-                snapshot::render_fish_deactivation(&bin_dir_str, &var_keys)
+                snapshot::render_fish_deactivation(&bin_dir_str, &var_keys, had_python_paths)
             }
         };
 
@@ -190,6 +202,53 @@ impl Activator {
                 }
             })
     }
+}
+
+/// Collect `<store_path>/lib/python3.X/site-packages` paths for every Python
+/// package in the lockfile on the current system.
+///
+/// Nixpkgs Python packages have store paths named like
+/// `/nix/store/<hash>-python3.12-torch-2.11.0`. We detect them by looking for
+/// the `-python3.` prefix (with a leading hyphen) in the path basename, which
+/// distinguishes them from the Python interpreter itself
+/// (`python3-3.12.13` has no dot after `python3`).
+fn python_site_packages_paths(lockfile: &Lockfile, system: &str) -> Vec<String> {
+    let mut paths: Vec<String> = lockfile
+        .packages
+        .values()
+        .filter_map(|resolved| {
+            let resolution = resolved.systems.get(system)?;
+            let version = extract_python_minor_version(&resolution.store_path)?;
+            Some(format!(
+                "{}/lib/python{}/site-packages",
+                resolution.store_path, version
+            ))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Extract the Python minor version string (e.g. `"3.12"`) from a Nix store
+/// path that belongs to a Python package.
+///
+/// Matches `-python3.X` (hyphen-prefixed) in the basename, e.g.:
+///   `/nix/store/<hash>-python3.12-torch-2.11.0`  → `"3.12"`
+///   `/nix/store/<hash>-python3-3.12.13`           → `None`  (the interpreter)
+fn extract_python_minor_version(store_path: &str) -> Option<String> {
+    let basename = store_path.rsplit('/').next().unwrap_or("");
+    let needle = "python3.";
+    let pos = basename.find(needle)?;
+    // Require a preceding '-' so we only match packages, not the interpreter
+    if pos == 0 || basename.as_bytes()[pos - 1] != b'-' {
+        return None;
+    }
+    let after = &basename[pos + needle.len()..];
+    let minor: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if minor.is_empty() {
+        return None;
+    }
+    Some(format!("3.{minor}"))
 }
 
 #[cfg(test)]
@@ -302,7 +361,7 @@ echo "Welcome!"
 
         let activator = Activator::new(tmp.path());
         let deact = activator
-            .generate_deactivation(&test_manifest(), ShellType::Bash)
+            .generate_deactivation(&test_manifest(), None, ShellType::Bash)
             .unwrap();
 
         assert!(deact.contains("unset ENVO_ENV"));
@@ -360,5 +419,131 @@ echo "Welcome!"
             .snapshot_path(ShellType::Fish)
             .to_string_lossy()
             .ends_with("env-snapshot.fish"));
+    }
+
+    #[test]
+    fn test_extract_python_minor_version_matches_package() {
+        assert_eq!(
+            extract_python_minor_version(
+                "/nix/store/abc123-python3.12-torch-2.11.0"
+            ),
+            Some("3.12".to_string())
+        );
+        assert_eq!(
+            extract_python_minor_version(
+                "/nix/store/def456-python3.11-numpy-1.26.0"
+            ),
+            Some("3.11".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_python_minor_version_skips_interpreter() {
+        // The Python interpreter itself uses "python3-3.12.13" — no dot after "python3"
+        assert_eq!(
+            extract_python_minor_version(
+                "/nix/store/jczbi6lb8vws7zc251v47bpijh805lyg-python3-3.12.13"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_python_minor_version_skips_non_python() {
+        assert_eq!(
+            extract_python_minor_version("/nix/store/abc-ripgrep-14.1.0"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_python_site_packages_paths_from_lockfile() {
+        let mut systems = HashMap::new();
+        systems.insert(
+            "x86_64-linux".to_string(),
+            PackageResolution {
+                store_path: "/nix/store/abc-python3.12-torch-2.11.0".to_string(),
+                resolved_attr: "python312Packages.torch".to_string(),
+            },
+        );
+        let mut packages = HashMap::new();
+        packages.insert("torch".to_string(), ResolvedPackage { systems });
+
+        // Add the Python interpreter (should NOT produce a PYTHONPATH entry)
+        let mut py_systems = HashMap::new();
+        py_systems.insert(
+            "x86_64-linux".to_string(),
+            PackageResolution {
+                store_path: "/nix/store/xyz-python3-3.12.13".to_string(),
+                resolved_attr: "python312".to_string(),
+            },
+        );
+        packages.insert("python".to_string(), ResolvedPackage { systems: py_systems });
+
+        let lf = Lockfile {
+            version: LOCKFILE_VERSION,
+            nixpkgs_revision: "rev".to_string(),
+            manifest_hash: "hash".to_string(),
+            packages,
+        };
+
+        let paths = python_site_packages_paths(&lf, "x86_64-linux");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths[0],
+            "/nix/store/abc-python3.12-torch-2.11.0/lib/python3.12/site-packages"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_includes_pythonpath_for_torch() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".envo/bin")).unwrap();
+
+        // Build a lockfile with a Python package and the interpreter
+        let system = detect_current_system();
+        let mut packages = std::collections::HashMap::new();
+
+        let mut torch_systems = std::collections::HashMap::new();
+        torch_systems.insert(
+            system.clone(),
+            PackageResolution {
+                store_path: "/nix/store/abc-python3.12-torch-2.11.0".to_string(),
+                resolved_attr: "python312Packages.torch".to_string(),
+            },
+        );
+        packages.insert("torch".to_string(), ResolvedPackage { systems: torch_systems });
+
+        let mut py_systems = std::collections::HashMap::new();
+        py_systems.insert(
+            system.clone(),
+            PackageResolution {
+                store_path: "/nix/store/xyz-python3-3.12.13".to_string(),
+                resolved_attr: "python312".to_string(),
+            },
+        );
+        packages.insert("python".to_string(), ResolvedPackage { systems: py_systems });
+
+        let lockfile = Lockfile {
+            version: LOCKFILE_VERSION,
+            nixpkgs_revision: "rev".to_string(),
+            manifest_hash: "hash".to_string(),
+            packages,
+        };
+
+        let manifest = Manifest::from_str(
+            "[project]\nname = \"ml\"\n[packages]\npython = \"*\"\ntorch = \"*\"\n",
+        ).unwrap();
+
+        let activator = Activator::new(tmp.path());
+        let snapshot = activator
+            .generate_snapshot(&manifest, &lockfile, &ShimManifest::new(), ShellType::Bash)
+            .unwrap();
+
+        assert!(snapshot.contains("export PYTHONPATH="));
+        assert!(snapshot.contains("python3.12-torch"));
+        assert!(snapshot.contains("site-packages"));
+        // Python interpreter should NOT be in PYTHONPATH
+        assert!(!snapshot.contains("python3-3.12.13/lib/python"));
     }
 }
