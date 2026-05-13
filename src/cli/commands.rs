@@ -431,14 +431,24 @@ pub fn cmd_run(command: &[String], verbose: bool) -> Result<()> {
         .generate_snapshot(&manifest, &lockfile, &shim_manifest, ShellType::Bash)
         .context("failed to generate activation snapshot")?;
 
-    // Build the command string: source the snapshot, then exec the user's command
-    let cmd_str = command.join(" ");
-    let full_script = format!("{snapshot}\nexec {cmd_str}");
+    // Source the snapshot in a subshell then exec the user's command.
+    //
+    // We use `exec "$@"` rather than joining the command into a string, so
+    // each argument is passed as a distinct process argument and never
+    // re-parsed by bash. This lets callers pass arguments that contain shell
+    // metacharacters (pipes, semicolons, quotes, etc.) without escaping.
+    //
+    // bash -c 'script' '--' cmd arg1 arg2 ...
+    //   $0 = '--' (ignored)   $1 = cmd   $2 = arg1   …   "$@" = cmd arg1 …
+    let full_script = format!("{snapshot}\nexec \"$@\"");
 
     let status = Command::new("bash")
-        .args(["-c", &full_script])
+        .arg("-c")
+        .arg(&full_script)
+        .arg("--")
+        .args(command)
         .status()
-        .with_context(|| format!("failed to run: {cmd_str}"))?;
+        .with_context(|| format!("failed to run: {}", command.join(" ")))?;
 
     std::process::exit(status.code().unwrap_or(1));
 }
