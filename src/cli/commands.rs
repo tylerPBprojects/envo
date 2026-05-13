@@ -226,8 +226,9 @@ pub fn cmd_uninstall(package: &str, verbose: bool) -> Result<()> {
         eprintln!("ℹ Re-resolving packages...");
     }
 
+    let existing_lockfile = Lockfile::load(Some(&cwd)).ok();
     let mut evaluator = NixEvaluator::new();
-    let lockfile = resolve_manifest(&manifest, &mut evaluator, None)
+    let lockfile = resolve_manifest(&manifest, &mut evaluator, existing_lockfile.as_ref())
         .context("failed to resolve packages")?;
 
     lockfile.save(&cwd).context("failed to save lockfile")?;
@@ -358,7 +359,7 @@ pub fn cmd_search(query: &str, json_output: bool, verbose: bool) -> Result<()> {
             if count >= 20 {
                 break;
             }
-            let pkg_name = attr_path.rsplit('.').next().unwrap_or(attr_path);
+            let pkg_name = strip_legacy_prefix(attr_path);
             let description = info
                 .get("description")
                 .and_then(|d| d.as_str())
@@ -384,7 +385,7 @@ pub fn cmd_search(query: &str, json_output: bool, verbose: bool) -> Result<()> {
                 break;
             }
 
-            let pkg_name = attr_path.rsplit('.').next().unwrap_or(attr_path);
+            let pkg_name = strip_legacy_prefix(attr_path);
             let description = info
                 .get("description")
                 .and_then(|d| d.as_str())
@@ -627,6 +628,19 @@ fn ensure_nix_available(verbose: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Strip the `legacyPackages.{system}.` prefix from a nix search attr path.
+///
+/// `nix search --json` returns keys like `legacyPackages.x86_64-linux.ripgrep`
+/// or `legacyPackages.x86_64-linux.python312Packages.torch`. We want the portion
+/// after the system component so users see `ripgrep` or `python312Packages.torch`
+/// — the exact string to use as a `pkg-path` value.
+fn strip_legacy_prefix(attr_path: &str) -> &str {
+    let mut parts = attr_path.splitn(3, '.');
+    parts.next(); // "legacyPackages"
+    parts.next(); // "{system}"
+    parts.next().unwrap_or(attr_path)
 }
 
 /// Load the lockfile, or resolve it if stale or missing.
