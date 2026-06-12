@@ -21,7 +21,7 @@ pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Errors that can occur during self-update operations.
 #[derive(Debug, Error)]
 pub enum SelfUpdateError {
-    #[error("could not check for updates — check your connection or run `gh auth login`")]
+    #[error("could not check for updates — check your internet connection")]
     NetworkError,
 
     #[error("could not parse version from GitHub response")]
@@ -257,7 +257,7 @@ pub fn get_current_platform() -> Result<String, SelfUpdateError> {
 /// Try to find a GitHub token for authenticating API and download requests.
 ///
 /// Checks GITHUB_TOKEN env var first, then falls back to the `gh` CLI.
-/// Required for private repositories.
+/// Optional — used to avoid GitHub API rate limits on authenticated requests.
 fn get_github_token() -> Option<String> {
     if let Ok(token) = std::env::var("GITHUB_TOKEN") {
         if !token.is_empty() {
