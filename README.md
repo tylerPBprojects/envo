@@ -11,13 +11,13 @@ real    0m0.003s    # 3ms. Not a typo.
 
 ## Install
 
-```bash
+```
 curl -sSf https://envo.dev/install.sh | sh
 ```
 
 Or build from source:
 
-```bash
+```
 git clone https://github.com/tylerPBprojects/envo.git
 cd envo
 cargo build --release
@@ -28,7 +28,7 @@ Requires [Nix](https://install.determinate.systems/nix) for package management. 
 
 ## Quickstart
 
-```bash
+```
 # Create an environment
 envo init
 
@@ -47,7 +47,7 @@ rg --version     # second run: instant (<5ms)
 
 The hardest environment problem in software — multi-GB GPU dependencies — in five commands:
 
-```bash
+```
 envo init --template cuda-pytorch
 envo install
 source <(envo activate --inline)     # 50ms. Nothing downloaded yet.
@@ -63,9 +63,9 @@ Run the full demo: `bash templates/cuda-pytorch/demo.sh`
 Traditional tools download everything at activation. envo doesn't.
 
 ```
-Traditional (Flox, devbox, conda):
+Traditional tools:
 
-  activate → download 2GB → wait 60s → ready
+  activate → download dependencies → wait → ready
 
 envo:
 
@@ -80,6 +80,7 @@ The trick: envo generates bash shims in `.envo/bin/` that look like real binarie
 ## Features
 
 **Core runtime:**
+
 - Lazy package realization — nothing downloads until invoked
 - Sub-100ms activation — sources a precomputed env snapshot, no subshell
 - Simple TOML manifest — feels like `pyproject.toml` or `Cargo.toml`
@@ -88,14 +89,17 @@ The trick: envo generates bash shims in `.envo/bin/` that look like real binarie
 - Auto-updater — `envo self-update`
 
 **IDE integration:**
+
 - VS Code extension — auto-activates terminals, status bar, package management commands
 - Manifest LSP — inline diagnostics, autocompletion, hover docs for `manifest.toml`
 
 **AI agent integration:**
+
 - MCP server — 6 tools + 3 resources for Claude Code, Cursor, and other MCP clients
 - Structured JSON output — `envo version --json`, `envo search --json`
 
 **DevOps:**
+
 - Nix bootstrap — detects and offers to install Nix interactively
 - POSIX installer — `curl | sh`, no sudo required
 - Telemetry — opt-out, privacy-conscious, PostHog-backed
@@ -104,7 +108,7 @@ The trick: envo generates bash shims in `.envo/bin/` that look like real binarie
 
 Environments are defined in `.envo/manifest.toml`:
 
-```toml
+```
 [project]
 name = "my-app"
 description = "My application"
@@ -156,7 +160,7 @@ The extension auto-activates your environment when you open a project:
 
 Connect Claude Code, Cursor, or any MCP client:
 
-```json
+```
 {
   "mcpServers": {
     "envo": {
@@ -172,15 +176,15 @@ Available resources: `envo://manifest`, `envo://lockfile`, `envo://status`
 
 ## How envo Compares
 
-| | envo | Flox | devbox | devenv |
-|---|---|---|---|---|
-| Activation speed | **<100ms** | 3-5s | 1-2s | 1-2s |
-| Lazy fetch | **Yes** | No | No | No |
-| Subshell | **No** | Yes | Yes | Yes |
-| Manifest LSP | **Yes** | No | No | No |
-| MCP server | **Yes** | No | No | No |
-| SBOM export | **Yes** | Planned | No | No |
-| Nix syntax exposed | **Never** | Rarely | Never | Sometimes |
+|                    | envo      | other tools    |
+| ------------------ | --------- | --------- |
+| Activation speed   | <100ms    | 1-5s      |
+| Lazy fetch         | Yes       | No        |
+| Subshell           | No        | Yes       |
+| Manifest LSP       | Yes       | No        |
+| MCP server         | Yes       | No        |
+| SBOM export        | Yes       | No        |
+| Nix syntax exposed | Never     | Sometimes |
 
 ## Architecture
 
@@ -233,7 +237,7 @@ envo/
 
 ## Development
 
-```bash
+```
 # Build all binaries (envo, envo-lsp, envo-mcp)
 cargo build
 
@@ -252,7 +256,7 @@ bash tests/integration/test_lsp.sh
 
 envo collects anonymous usage data to understand how the product is used. Telemetry is opt-out — disable it in `~/.envo/config.toml`:
 
-```toml
+```
 [telemetry]
 enabled = false
 ```
